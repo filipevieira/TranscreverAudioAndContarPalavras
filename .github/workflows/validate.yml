@@ -1,0 +1,35 @@
+name: Validação Python
+
+on: [push, pull_request]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python-version: ['3.11']
+
+    steps:
+      - uses: actions/checkout@v3
+      - name: Configurar Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Instalar dependências
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt --index-url https://download.pytorch.org/whl/cpu
+          pip install flake8 black isort
+
+      - name: Validar formatação (black)
+        run: black --check transcricao_audio.py
+        continue-on-error: true
+
+      - name: Validar imports (isort)
+        run: isort --check-only transcricao_audio.py
+        continue-on-error: true
+
+      - name: Lint com flake8
+        run: flake8 transcricao_audio.py --max-line-length=100
+        continue-on-error: true
