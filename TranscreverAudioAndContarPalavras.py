@@ -94,41 +94,42 @@ def format_time(seconds: float) -> str:
     return str(timedelta(seconds=int(seconds)))
 
 
-def main(audio_file: str, whisper_model: str = DEFAULT_MODEL):
-    """Processa arquivo de áudio: transcrição, alinhamento e diarização.
+
+def process_audio(
+    audio_file: str,
+    whisper_model: str = DEFAULT_MODEL,
+    hf_token: str = None,
+    target_words: list = None,
+    device: str = None,
+    batch_size: int = BATCH_SIZE
+) -> dict:
+    """Função principal de processamento para ser usada por API ou CLI.
     
-    Args:
-        audio_file: Caminho do arquivo de áudio.
-        whisper_model: Modelo Whisper a usar ('tiny', 'base', 'small', 'medium', 'large-v3').
+    Returns:
+        Dict com chaves: 'transcription' (lista de segmentos), 'stats' (textos), 'files' (caminhos)
     """
-    # Carrega palavras-chave do arquivo externo
-    target_words = load_target_words("palavras.json")
-    
+    if target_words is None:
+        target_words = []
+        
     start_time = time.time()
     
-    # Dispositivo (GPU se tiver)
-    device = "cuda" if torch.cuda.is_available() else "cpu"
+    # Detecção de dispositivo
+    if not device:
+        device = "cuda" if torch.cuda.is_available() else "cpu"
+    
     compute_type = "float16" if device == "cuda" else "float32"
-    print(f"\n{'='*60}")
     print(f"Dispositivo: {device} (compute_type={compute_type})")
-    print(f"Modelo: {whisper_model}")
-    print(f"Batch size: {BATCH_SIZE}")
-    print(f"{'='*60}\n")
 
     audio_path = Path(audio_file)
     if not audio_path.exists():
-        print(f"❌ ERRO: arquivo {audio_path} não encontrado.")
-        return
+        raise FileNotFoundError(f"Arquivo {audio_path} não encontrado.")
 
-    # Carrega áudio
+    # 1. Carrega áudio
     print(f"[1/5] Carregando áudio...")
-    step_start = time.time()
     audio = whisperx.load_audio(str(audio_path))
-    print(f"✓ Áudio carregado em {format_time(time.time() - step_start)}")
 
-    # Modelo WhisperX (tenta GPU, cai para CPU se falhar)
+    # 2. Carrega modelo
     print(f"[2/5] Carregando modelo Whisper ({whisper_model})...")
-    step_start = time.time()
     try:
         model = whisperx.load_model(whisper_model, device, compute_type=compute_type)
     except OSError as exc:
@@ -136,140 +137,141 @@ def main(audio_file: str, whisper_model: str = DEFAULT_MODEL):
             print(f"⚠️  Falha na GPU ({exc}); tentando CPU...")
             device = "cpu"
             compute_type = "float32"
-            try:
-                model = whisperx.load_model(whisper_model, device, compute_type=compute_type)
-            except Exception as exc2:
-                print(f"❌ ERRO ao carregar modelo na CPU: {exc2}")
-                return
+            model = whisperx.load_model(whisper_model, device, compute_type=compute_type)
         else:
-            print(f"❌ ERRO ao carregar modelo: {exc}")
-            return
+            raise exc
 
-    if device == "cpu":
-        print("⚠️  Executando em CPU (mais lento; GPU recomendada para audios longos).")
-
-    print(f"✓ Modelo carregado em {format_time(time.time() - step_start)}")
-    
+    # 3. Transcreve
     print(f"[3/5] Transcrevendo áudio...")
-    step_start = time.time()
-    result = model.transcribe(audio, batch_size=BATCH_SIZE, language="pt")
-    print(f"✓ Transcrição concluída em {format_time(time.time() - step_start)}")
+    result = model.transcribe(audio, batch_size=batch_size, language="pt")
 
-    # Alinhamento
+    # 4. Alinhamento
     print(f"[4/5] Alinhando palavras...")
-    step_start = time.time()
-    model_a, metadata = whisperx.load_align_model(
-        language_code=result["language"], device=device
-    )
-    result = whisperx.align(
-        result["segments"],
-        model_a,
-        metadata,
-        audio,
-        device,
-        return_char_alignments=False,
-    )
-    print(f"✓ Alinhamento concluído em {format_time(time.time() - step_start)}")
+    try:
+        model_a, metadata = whisperx.load_align_model(
+            language_code=result["language"], device=device
+        )
+        result = whisperx.align(
+            result["segments"],
+            model_a,
+            metadata,
+            audio,
+            device,
+            return_char_alignments=False,
+        )
+    except Exception as e:
+        print(f"⚠️  Erro no alinhamento: {e}")
 
-    # Diarização (falantes)
+    # 5. Diarização
     print(f"[5/5] Identificando falantes (diarização)...")
-    step_start = time.time()
-    diarize_model = None
-    if HF_TOKEN:
+    if hf_token:
         try:
-            diarize_model = whisperx.DiarizationPipeline(use_auth_token=HF_TOKEN, device=device)
-        except Exception as exc:
-            print(f"⚠️  Diarização desativada (token inválido/sem acesso)")
-
-    if diarize_model:
-        try:
+            diarize_model = whisperx.DiarizationPipeline(use_auth_token=hf_token, device=device)
             diarize_segments = diarize_model(audio)
             result = whisperx.assign_word_speakers(diarize_segments, result)
-            print(f"✓ Diarização concluída em {format_time(time.time() - step_start)}")
         except Exception as exc:
             print(f"⚠️  Erro na diarização: {exc}")
     else:
-        print("⚠️  Diarização não executada (token não configurado).")
+        print("⚠️  Diarização ignorada (sem token).")
 
-    # Contagens
-    word_count = defaultdict(int)  # total de palavras por falante
-    specific_word_count = defaultdict(lambda: defaultdict(int))  # falante -> palavra -> qtd
+    # Processar resultados
+    word_count = defaultdict(int)
+    specific_word_count = defaultdict(lambda: defaultdict(int))
+    transcript_lines = []
 
-    # Arquivos de saída
-    transcript_file = audio_path.with_suffix(".transcricao.txt")
-    stats_file = audio_path.with_suffix(".estatisticas.txt")
+    for segment in result["segments"]:
+        speaker = segment.get("speaker", "Unknown")
+        text = segment["text"].strip()
+        transcript_lines.append({"speaker": speaker, "text": text, "start": segment["start"], "end": segment["end"]})
 
-    with transcript_file.open("w", encoding="utf-8") as f:
-        for segment in result["segments"]:
-            speaker = segment.get("speaker", "Unknown")
-            text = segment["text"].strip()
-            f.write(f"{speaker}: {text}\n")
+        # contagem
+        words = re.findall(r"\w+", text, flags=re.UNICODE)
+        word_count[speaker] += len(words)
 
-            # contagem total de palavras
-            words = re.findall(r"\w+", text, flags=re.UNICODE)
-            word_count[speaker] += len(words)
+        norm_text = normalize(text)
+        for w in target_words:
+            pattern = r"\b" + re.escape(w.lower()) + r"\b"
+            specific_word_count[speaker][w] += len(re.findall(pattern, norm_text))
 
-            # contagem de palavras específicas
-            norm_text = normalize(text)
-            for w in target_words:
-                pattern = r"\b" + re.escape(w.lower()) + r"\b"
-                specific_word_count[speaker][w] += len(re.findall(pattern, norm_text))
+    # Gera estatísticas formatadas
+    stats_text = "CONTAGEM DE PALAVRAS POR FALANTE\n"
+    for speaker, count in word_count.items():
+        stats_text += f"{speaker}: {count} palavras\n"
 
-    # Salva estatísticas
-    with stats_file.open("w", encoding="utf-8") as f:
-        f.write("CONTAGEM DE PALAVRAS POR FALANTE\n")
-        for speaker, count in word_count.items():
-            f.write(f"{speaker}: {count} palavras\n")
-
-        if target_words:
-            f.write("\nCONTAGEM DE PALAVRAS ESPECÍFICAS POR FALANTE\n")
-            for speaker, words_dict in specific_word_count.items():
-                f.write(f"\n{speaker}:\n")
-                for w, c in words_dict.items():
-                    f.write(f"  '{w}': {c} vez(es)\n")
-        else:
-            f.write("\n(Nenhuma palavra-chave configurada em palavras.json)\n")
-
-    # limpar GPU
+    if target_words:
+        stats_text += "\nCONTAGEM DE PALAVRAS ESPECÍFICAS POR FALANTE\n"
+        for speaker, words_dict in specific_word_count.items():
+            stats_text += f"\n{speaker}:\n"
+            for w, c in words_dict.items():
+                stats_text += f"  '{w}': {c} vez(es)\n"
+    
+    # Limpeza
     gc.collect()
     if device == "cuda":
         torch.cuda.empty_cache()
+
+    return {
+        "transcription": transcript_lines,
+        "stats": stats_text,
+        "word_count": dict(word_count),
+        "specific_word_count": {k: dict(v) for k, v in specific_word_count.items()}
+    }
+
+
+def main(audio_file: str, whisper_model: str = DEFAULT_MODEL):
+    """Entrypoint CLI."""
+    # Carrega configs
+    target_words = load_target_words("palavras.json")
     
-    total_time = time.time() - start_time
     print(f"\n{'='*60}")
-    print(f"✓ Processamento concluído em {format_time(total_time)}")
-    print(f"TRANSCRIÇÃO: {transcript_file}")
-    print(f"ESTATÍSTICAS: {stats_file}")
+    print(f"Iniciando processamento: {audio_file}")
     print(f"{'='*60}\n")
+    
+    try:
+        # Processa
+        results = process_audio(
+            audio_file=audio_file,
+            whisper_model=whisper_model,
+            hf_token=HF_TOKEN,
+            target_words=target_words,
+            batch_size=BATCH_SIZE
+        )
+        
+        # Salva arquivos
+        audio_path = Path(audio_file)
+        transcript_file = audio_path.with_suffix(".transcricao.txt")
+        stats_file = audio_path.with_suffix(".estatisticas.txt")
+        
+        with transcript_file.open("w", encoding="utf-8") as f:
+            for line in results["transcription"]:
+                f.write(f"{line['speaker']}: {line['text']}\n")
+                
+        with stats_file.open("w", encoding="utf-8") as f:
+            f.write(results["stats"])
+            
+        print(f"\n{'='*60}")
+        print(f"✓ Concluído!")
+        print(f"Arquivo Transcrição: {transcript_file}")
+        print(f"Arquivo Estatísticas: {stats_file}")
+        print(f"{'='*60}\n")
+        
+    except Exception as e:
+        print(f"❌ Erro fatal: {e}")
 
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(
         description="Transcreve, alinha e identifica falantes em arquivo de áudio.",
-        formatter_class=argparse.RawDescriptionHelpFormatter,
-        epilog="""\
-Exemplos:
-  python transcricao_audio.py audio.mp3
-  python transcricao_audio.py audio.wav --model small
-  python transcricao_audio.py audio.mp3 --model large-v3
-
-Modelos disponíveis (do mais rápido ao mais preciso):
-  tiny    → muito rápido, menos preciso
-  base    → rápido, boa qualidade
-  small   → padrão, equilibrado (recomendado)
-  medium  → lento, melhor qualidade
-  large-v3→ muito lento, melhor qualidade
-
-Token Hugging Face:
-  Configure via variável de ambiente: $env:HUGGINGFACE_TOKEN = "seu_token"
-        """)
-    parser.add_argument("audio", help="Caminho do arquivo de áudio (mp3, wav, m4a, etc.)")
+        formatter_class=argparse.RawDescriptionHelpFormatter
+    )
+    parser.add_argument("audio", help="Caminho do arquivo de áudio")
     parser.add_argument(
         "--model",
         default=DEFAULT_MODEL,
         choices=list(MODELS.keys()),
-        help=f"Modelo Whisper a usar (padrão: {DEFAULT_MODEL})"
+        help=f"Modelo Whisper (padrão: {DEFAULT_MODEL})"
     )
     
     args = parser.parse_args()
     main(args.audio, args.model)
+

@@ -1,0 +1,126 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Transcrição de Áudio com IA</title>
+    
+    <!-- Fonts -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    
+    <!-- Icons -->
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    
+    <!-- Custom CSS -->
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+<div class="background-globes">
+    <div class="globe globe-1"></div>
+    <div class="globe globe-2"></div>
+</div>
+
+<main class="container">
+    <header>
+        <div class="logo">
+            <i class="fa-solid fa-wave-square"></i>
+            <h1>Whisper<span>X</span> Transcriber</h1>
+        </div>
+        <p class="subtitle">Transcrição, Diarização e Análise de Áudio com Inteligência Artificial</p>
+    </header>
+
+    <div class="grid-layout">
+        <!-- Settings Panel -->
+        <aside class="panel settings-panel">
+            <h2><i class="fa-solid fa-sliders"></i> Configurações</h2>
+            
+            <form id="transcribeForm">
+                <div class="form-group">
+                    <label for="model">Modelo Whisper</label>
+                    <div class="select-wrapper">
+                        <select id="model" name="model">
+                            <option value="tiny">Tiny (Mais Rápido)</option>
+                            <option value="base">Base</option>
+                            <option value="small" selected>Small (Recomendado)</option>
+                            <option value="medium">Medium</option>
+                            <option value="large-v3">Large v3 (Mais Preciso)</option>
+                        </select>
+                        <i class="fa-solid fa-chevron-down"></i>
+                    </div>
+                </div>
+
+                <div class="form-group">
+                    <label for="token">Token Hugging Face <small>(Opcional para Diarização)</small></label>
+                    <input type="password" id="token" name="token" placeholder="hf_...">
+                </div>
+
+                <div class="form-group">
+                    <label for="keywords">Palavras-chave <small>(Separadas por vírgula)</small></label>
+                    <input type="text" id="keywords" name="keywords" placeholder="ex: mano, tipo, absurdo">
+                </div>
+
+                <div class="form-group file-upload" id="dropArea">
+                    <input type="file" id="audioFile" name="file" accept="audio/*,video/*" hidden>
+                    <div class="upload-content">
+                        <i class="fa-solid fa-cloud-arrow-up"></i>
+                        <p>Arraste o áudio aqui ou <span>clique para selecionar</span></p>
+                        <p class="file-name" id="fileName"></p>
+                    </div>
+                </div>
+
+                <button type="submit" class="btn-primary" id="submitBtn">
+                    <span class="btn-text">Iniciar Transcrição</span>
+                    <span class="loading-spinner"></span>
+                </button>
+            </form>
+        </aside>
+
+        <!-- Results Panel -->
+        <section class="panel results-panel">
+            <div class="tabs">
+                <button class="tab-btn active" data-tab="transcription">Transcrição</button>
+                <button class="tab-btn" data-tab="stats">Estatísticas</button>
+            </div>
+
+            <div id="loadingState" class="state-container hidden">
+                <div class="loader">
+                    <div class="bar"></div>
+                    <div class="bar"></div>
+                    <div class="bar"></div>
+                    <div class="bar"></div>
+                </div>
+                <h3>Processando Áudio...</h3>
+                <p>Isso pode levar alguns minutos. Na primeira vez, baixaremos os modelos.</p>
+                <p id="timer">00:00</p>
+            </div>
+
+            <div id="emptyState" class="state-container">
+                <i class="fa-regular fa-file-audio"></i>
+                <h3>Nenhum resultado ainda</h3>
+                <p>Carregue um áudio e inicie a transcrição para ver os resultados aqui.</p>
+            </div>
+
+            <div id="resultsContent" class="hidden">
+                <div id="transcriptionTab" class="tab-content active">
+                    <div class="transcription-container" id="transcriptionList">
+                        <!-- Items injected by JS -->
+                    </div>
+                    <button class="btn-secondary copy-btn" onclick="copyTranscription()">
+                        <i class="fa-regular fa-copy"></i> Copiar Texto
+                    </button>
+                </div>
+
+                <div id="statsTab" class="tab-content">
+                    <pre id="statsContent"></pre>
+                </div>
+            </div>
+        </section>
+    </div>
+</main>
+
+<script src="script.js"></script>
+</body>
+</html>
